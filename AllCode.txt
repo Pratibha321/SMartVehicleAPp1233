@@ -1,0 +1,2377 @@
+VehicleService/
+ ├── Controllers/
+ │    └── VehiclesController.cs
+ ├── DTOs/
+ │    ├── VehicleCreateDto.cs
+ │    ├── VehicleReadDto.cs
+ ├── Models/
+ │    └── Vehicle.cs
+ ├── Services/
+ │    └── VehicleService.cs
+ ├── Data/
+ │    └── VehicleDbContext.cs
+ ├── Helpers/
+ │    └── JwtTokenGenerator.cs   (same as DriverService)
+ ├── Controllers/
+ │    └── AuthController.cs      (same as DriverService)
+ ├── Program.cs
+ └── appsettings.json
+
+
+1. Models/Vehicle.cs
+
+namespace VehicleService.Models;
+
+public class Vehicle
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string RegistrationNumber { get; set; } = string.Empty;
+    public string Type { get; set; } = string.Empty; // Truck, Van, Bike
+    public int Capacity { get; set; } // in KG
+    public DateTime LastMaintenanceDate { get; set; } = DateTime.UtcNow;
+    public bool IsAvailable { get; set; } = true;
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+
+2. DTOs
+DTOs/VehicleCreateDto.cs
+
+namespace VehicleService.DTOs;
+
+public class VehicleCreateDto
+{
+    public string RegistrationNumber { get; set; } = string.Empty;
+    public string Type { get; set; } = string.Empty;
+    public int Capacity { get; set; }
+    public DateTime LastMaintenanceDate { get; set; } = DateTime.UtcNow;
+    public bool IsAvailable { get; set; } = true;
+}
+
+
+3. Data Layer
+Data/VehicleDbContext.cs
+using Microsoft.EntityFrameworkCore;
+using VehicleService.Models;
+
+namespace VehicleService.Data;
+
+public class VehicleDbContext : DbContext
+{
+    public VehicleDbContext(DbContextOptions<VehicleDbContext> options) : base(options) { }
+
+    public DbSet<Vehicle> Vehicles { get; set; }
+}
+
+4. Service Layer
+Services/VehicleService.cs
+
+
+using VehicleService.Data;
+using VehicleService.Models;
+using Microsoft.EntityFrameworkCore;
+
+namespace VehicleService.Services;
+
+public class VehicleService
+{
+    private readonly VehicleDbContext _context;
+
+    public VehicleService(VehicleDbContext context)
+    {
+        _context = context;
+    }
+
+    public async Task<IEnumerable<Vehicle>> GetAllAsync() =>
+        await _context.Vehicles.ToListAsync();
+
+    public async Task<Vehicle?> GetByIdAsync(Guid id) =>
+        await _context.Vehicles.FindAsync(id);
+
+    public async Task<Vehicle> CreateAsync(Vehicle vehicle)
+    {
+        _context.Vehicles.Add(vehicle);
+        await _context.SaveChangesAsync();
+        return vehicle;
+    }
+
+    public async Task<bool> DeleteAsync(Guid id)
+    {
+        var vehicle = await _context.Vehicles.FindAsync(id);
+        if (vehicle == null) return false;
+
+        _context.Vehicles.Remove(vehicle);
+        await _context.SaveChangesAsync();
+        return true;
+    }
+}
+
+
+5. Controller
+Controllers/VehiclesController.cs
+
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
+using VehicleService.Services;
+using VehicleService.DTOs;
+using VehicleService.Models;
+
+namespace VehicleService.Controllers;
+
+[ApiController]
+[Route("api/[controller]")]
+public class VehiclesController : ControllerBase
+{
+    private readonly VehicleService.Services.VehicleService _service;
+
+    public VehiclesController(VehicleService.Services.VehicleService service)
+    {
+        _service = service;
+    }
+
+    [HttpGet]
+    [Authorize(Roles = "Admin,Dispatcher")]
+    public async Task<ActionResult<IEnumerable<VehicleReadDto>>> GetAll()
+    {
+        var vehicles = await _service.GetAllAsync();
+        return Ok(vehicles.Select(v => new VehicleReadDto
+        {
+            Id = v.Id,
+            RegistrationNumber = v.RegistrationNumber,
+            Type = v.Type,
+            Capacity = v.Capacity,
+            LastMaintenanceDate = v.LastMaintenanceDate,
+            IsAvailable = v.IsAvailable,
+            CreatedAt = v.CreatedAt
+        }));
+    }
+
+    [HttpGet("{id}")]
+    [Authorize(Roles = "Admin,Dispatcher")]
+    public async Task<ActionResult<VehicleReadDto>> GetById(Guid id)
+    {
+        var v = await _service.GetByIdAsync(id);
+        if (v == null) return NotFound();
+
+        return Ok(new VehicleReadDto
+        {
+            Id = v.Id,
+            RegistrationNumber = v.RegistrationNumber,
+            Type = v.Type,
+            Capacity = v.Capacity,
+            LastMaintenanceDate = v.LastMaintenanceDate,
+            IsAvailable = v.IsAvailable,
+            CreatedAt = v.CreatedAt
+        });
+    }
+
+    [HttpPost]
+    [Authorize(Roles = "Admin")]
+    public async Task<ActionResult<VehicleReadDto>> Create(VehicleCreateDto dto)
+    {
+        var vehicle = new Vehicle
+        {
+            RegistrationNumber = dto.RegistrationNumber,
+            Type = dto.Type,
+            Capacity = dto.Capacity,
+            LastMaintenanceDate = dto.LastMaintenanceDate,
+            IsAvailable = dto.IsAvailable
+        };
+
+        var created = await _service.CreateAsync(vehicle);
+
+        var result = new VehicleReadDto
+        {
+            Id = created.Id,
+            RegistrationNumber = created.RegistrationNumber,
+            Type = created.Type,
+            Capacity = created.Capacity,
+            LastMaintenanceDate = created.LastMaintenanceDate,
+            IsAvailable = created.IsAvailable,
+            CreatedAt = created.CreatedAt
+        };
+
+        return CreatedAtAction(nameof(GetById), new { id = result.Id }, result);
+    }
+
+    [HttpDelete("{id}")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> Delete(Guid id)
+    {
+        var success = await _service.DeleteAsync(id);
+        return success ? NoContent() : NotFound();
+    }
+}
+
+
+6. Auth & JWT (same as DriverService)
+
+Copy Helpers/JwtTokenGenerator.cs and Controllers/AuthController.cs from DriverService into VehicleService.
+
+
+program.cs
+
+using VehicleService.Data;
+using VehicleService.Services;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+builder.Services.AddDbContext<VehicleDbContext>(opt =>
+    opt.UseInMemoryDatabase("VehicleDb"));
+
+builder.Services.AddScoped<VehicleService.Services.VehicleService>();
+
+// 🔑 JWT
+var jwtKey = builder.Configuration["Jwt:Key"] ?? "super_secret_key_123!";
+var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "SmartFleet";
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer = jwtIssuer,
+        ValidAudience = jwtIssuer,
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
+    };
+});
+
+builder.Services.AddAuthorization();
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
+
+app.Run();
+
+
+8. appsettings.json
+{
+  "Jwt": {
+    "Key": "super_secret_key_123!",
+    "Issuer": "SmartFleet"
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*"
+}
+
+
+✅ Now
+
+===============================================================================
+
+
+
+📂 Folder Structure
+DriverService/
+ ├── Controllers/
+ │    ├── DriversController.cs
+ │    └── AuthController.cs
+ ├── DTOs/
+ │    ├── DriverCreateDto.cs
+ │    ├── DriverReadDto.cs
+ ├── Models/
+ │    └── Driver.cs
+ ├── Services/
+ │    └── DriverService.cs
+ ├── Data/
+ │    └── DriverDbContext.cs
+ ├── Helpers/
+ │    └── JwtTokenGenerator.cs
+ ├── Program.cs
+ └── appsettings.json
+
+1. Models/Driver.cs
+namespace DriverService.Models;
+
+public class Driver
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string Name { get; set; } = string.Empty;
+    public string LicenseNumber { get; set; } = string.Empty;
+    public string PhoneNumber { get; set; } = string.Empty;
+    public bool IsAvailable { get; set; } = true;
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+2. DTOs
+DTOs/DriverCreateDto.cs
+namespace DriverService.DTOs;
+
+public class DriverCreateDto
+{
+    public string Name { get; set; } = string.Empty;
+    public string LicenseNumber { get; set; } = string.Empty;
+    public string PhoneNumber { get; set; } = string.Empty;
+    public bool IsAvailable { get; set; } = true;
+}
+
+DTOs/DriverReadDto.cs
+namespace DriverService.DTOs;
+
+public class DriverReadDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string LicenseNumber { get; set; } = string.Empty;
+    public string PhoneNumber { get; set; } = string.Empty;
+    public bool IsAvailable { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+3. Data Layer
+Data/DriverDbContext.cs
+using Microsoft.EntityFrameworkCore;
+using DriverService.Models;
+
+namespace DriverService.Data;
+
+public class DriverDbContext : DbContext
+{
+    public DriverDbContext(DbContextOptions<DriverDbContext> options) : base(options) { }
+
+    public DbSet<Driver> Drivers { get; set; }
+}
+
+4. Service Layer
+Services/DriverService.cs
+using DriverService.Data;
+using DriverService.Models;
+using Microsoft.EntityFrameworkCore;
+
+namespace DriverService.Services;
+
+public class DriverService
+{
+    private readonly DriverDbContext _context;
+
+    public DriverService(DriverDbContext context)
+    {
+        _context = context;
+    }
+
+    public async Task<IEnumerable<Driver>> GetAllAsync() =>
+        await _context.Drivers.ToListAsync();
+
+    public async Task<Driver?> GetByIdAsync(Guid id) =>
+        await _context.Drivers.FindAsync(id);
+
+    public async Task<Driver> CreateAsync(Driver driver)
+    {
+        _context.Drivers.Add(driver);
+        await _context.SaveChangesAsync();
+        return driver;
+    }
+
+    public async Task<bool> DeleteAsync(Guid id)
+    {
+        var driver = await _context.Drivers.FindAsync(id);
+        if (driver == null) return false;
+
+        _context.Drivers.Remove(driver);
+        await _context.SaveChangesAsync();
+        return true;
+    }
+}
+
+5. Controller
+Controllers/DriversController.cs
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
+using DriverService.Services;
+using DriverService.DTOs;
+using DriverService.Models;
+
+namespace DriverService.Controllers;
+
+[ApiController]
+[Route("api/[controller]")]
+public class DriversController : ControllerBase
+{
+    private readonly DriverService.Services.DriverService _service;
+
+    public DriversController(DriverService.Services.DriverService service)
+    {
+        _service = service;
+    }
+
+    [HttpGet]
+    [Authorize(Roles = "Admin,Dispatcher")]
+    public async Task<ActionResult<IEnumerable<DriverReadDto>>> GetAll()
+    {
+        var drivers = await _service.GetAllAsync();
+        return Ok(drivers.Select(d => new DriverReadDto
+        {
+            Id = d.Id,
+            Name = d.Name,
+            LicenseNumber = d.LicenseNumber,
+            PhoneNumber = d.PhoneNumber,
+            IsAvailable = d.IsAvailable,
+            CreatedAt = d.CreatedAt
+        }));
+    }
+
+    [HttpGet("{id}")]
+    [Authorize(Roles = "Admin,Dispatcher")]
+    public async Task<ActionResult<DriverReadDto>> GetById(Guid id)
+    {
+        var d = await _service.GetByIdAsync(id);
+        if (d == null) return NotFound();
+
+        return Ok(new DriverReadDto
+        {
+            Id = d.Id,
+            Name = d.Name,
+            LicenseNumber = d.LicenseNumber,
+            PhoneNumber = d.PhoneNumber,
+            IsAvailable = d.IsAvailable,
+            CreatedAt = d.CreatedAt
+        });
+    }
+
+    [HttpPost]
+    [Authorize(Roles = "Admin")]
+    public async Task<ActionResult<DriverReadDto>> Create(DriverCreateDto dto)
+    {
+        var driver = new Driver
+        {
+            Name = dto.Name,
+            LicenseNumber = dto.LicenseNumber,
+            PhoneNumber = dto.PhoneNumber,
+            IsAvailable = dto.IsAvailable
+        };
+
+        var created = await _service.CreateAsync(driver);
+
+        var result = new DriverReadDto
+        {
+            Id = created.Id,
+            Name = created.Name,
+            LicenseNumber = created.LicenseNumber,
+            PhoneNumber = created.PhoneNumber,
+            IsAvailable = created.IsAvailable,
+            CreatedAt = created.CreatedAt
+        };
+
+        return CreatedAtAction(nameof(GetById), new { id = result.Id }, result);
+    }
+
+    [HttpDelete("{id}")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> Delete(Guid id)
+    {
+        var success = await _service.DeleteAsync(id);
+        return success ? NoContent() : NotFound();
+    }
+}
+
+6. Auth & JWT
+
+✅ Same as in VehicleService.
+Copy these into DriverService:
+
+Helpers/JwtTokenGenerator.cs
+
+Controllers/AuthController.cs
+
+7. Program.cs
+using DriverService.Data;
+using DriverService.Services;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+builder.Services.AddDbContext<DriverDbContext>(opt =>
+    opt.UseInMemoryDatabase("DriverDb"));
+
+builder.Services.AddScoped<DriverService.Services.DriverService>();
+
+// 🔑 JWT
+var jwtKey = builder.Configuration["Jwt:Key"] ?? "super_secret_key_123!";
+var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "SmartFleet";
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer = jwtIssuer,
+        ValidAudience = jwtIssuer,
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
+    };
+});
+
+builder.Services.AddAuthorization();
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
+
+app.Run();
+
+8. appsettings.json
+{
+  "Jwt": {
+    "Key": "super_secret_key_123!",
+    "Issuer": "SmartFleet"
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*"
+}
+
+
+✅ Now D
+
+
+📌 Step 3: TripService (with CQRS)
+
+This service will:
+
+Manage trips (schedule, route, status).
+
+Use CQRS (separate write & read models).
+
+Expose REST APIs (controllers).
+
+Use EF Core InMemory DB (for now).
+
+JWT Auth + role-based access (Admin, Dispatcher, Driver).
+
+Ensure idempotency in trip creation (prevent duplicate trip IDs).
+
+📂 Folder Structure
+TripService/
+ ├── Controllers/
+ │    └── TripsController.cs
+ ├── DTOs/
+ │    ├── TripCreateDto.cs
+ │    ├── TripReadDto.cs
+ │    └── TripUpdateDto.cs
+ ├── Models/
+ │    └── Trip.cs
+ ├── CQRS/
+ │    ├── Commands/
+ │    │    ├── CreateTripCommand.cs
+ │    │    └── UpdateTripCommand.cs
+ │    ├── Queries/
+ │    │    └── GetTripsQuery.cs
+ ├── Data/
+ │    └── TripDbContext.cs
+ ├── Services/
+ │    └── TripCommandService.cs
+ │    └── TripQueryService.cs
+ ├── Helpers/
+ │    └── JwtTokenGenerator.cs
+ ├── Program.cs
+ └── appsettings.json
+
+1. Models/Trip.cs
+namespace TripService.Models;
+
+public enum TripStatus { Scheduled, InProgress, Completed, Cancelled }
+
+public class Trip
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string VehicleId { get; set; } = string.Empty;
+    public string DriverId { get; set; } = string.Empty;
+    public string Route { get; set; } = string.Empty;
+    public TripStatus Status { get; set; } = TripStatus.Scheduled;
+    public DateTime StartTime { get; set; } = DateTime.UtcNow;
+    public DateTime? EndTime { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+2. DTOs
+DTOs/TripCreateDto.cs
+namespace TripService.DTOs;
+
+public class TripCreateDto
+{
+    public string VehicleId { get; set; } = string.Empty;
+    public string DriverId { get; set; } = string.Empty;
+    public string Route { get; set; } = string.Empty;
+}
+
+DTOs/TripReadDto.cs
+using TripService.Models;
+
+namespace TripService.DTOs;
+
+public class TripReadDto
+{
+    public Guid Id { get; set; }
+    public string VehicleId { get; set; } = string.Empty;
+    public string DriverId { get; set; } = string.Empty;
+    public string Route { get; set; } = string.Empty;
+    public TripStatus Status { get; set; }
+    public DateTime StartTime { get; set; }
+    public DateTime? EndTime { get; set; }
+}
+
+DTOs/TripUpdateDto.cs
+using TripService.Models;
+
+namespace TripService.DTOs;
+
+public class TripUpdateDto
+{
+    public TripStatus Status { get; set; }
+    public DateTime? EndTime { get; set; }
+}
+
+3. Data Layer
+Data/TripDbContext.cs
+using Microsoft.EntityFrameworkCore;
+using TripService.Models;
+
+namespace TripService.Data;
+
+public class TripDbContext : DbContext
+{
+    public TripDbContext(DbContextOptions<TripDbContext> options) : base(options) { }
+
+    public DbSet<Trip> Trips { get; set; }
+}
+
+4. CQRS: Commands & Queries
+CQRS/Commands/CreateTripCommand.cs
+using TripService.DTOs;
+using TripService.Models;
+
+namespace TripService.CQRS.Commands;
+
+public class CreateTripCommand
+{
+    public TripCreateDto Dto { get; }
+    public CreateTripCommand(TripCreateDto dto) => Dto = dto;
+}
+
+CQRS/Commands/UpdateTripCommand.cs
+using TripService.DTOs;
+
+namespace TripService.CQRS.Commands;
+
+public class UpdateTripCommand
+{
+    public Guid Id { get; }
+    public TripUpdateDto Dto { get; }
+    public UpdateTripCommand(Guid id, TripUpdateDto dto)
+    {
+        Id = id;
+        Dto = dto;
+    }
+}
+
+CQRS/Queries/GetTripsQuery.cs
+namespace TripService.CQRS.Queries;
+
+public class GetTripsQuery { }
+
+5. Services
+Services/TripCommandService.cs
+using TripService.Data;
+using TripService.Models;
+using TripService.CQRS.Commands;
+using Microsoft.EntityFrameworkCore;
+
+namespace TripService.Services;
+
+public class TripCommandService
+{
+    private readonly TripDbContext _context;
+
+    public TripCommandService(TripDbContext context)
+    {
+        _context = context;
+    }
+
+    public async Task<Trip?> Handle(CreateTripCommand command)
+    {
+        // Idempotency check
+        var exists = await _context.Trips
+            .AnyAsync(t => t.VehicleId == command.Dto.VehicleId &&
+                           t.DriverId == command.Dto.DriverId &&
+                           t.Route == command.Dto.Route &&
+                           t.Status == TripStatus.Scheduled);
+
+        if (exists) return null; // duplicate
+
+        var trip = new Trip
+        {
+            VehicleId = command.Dto.VehicleId,
+            DriverId = command.Dto.DriverId,
+            Route = command.Dto.Route,
+            Status = TripStatus.Scheduled,
+            StartTime = DateTime.UtcNow
+        };
+
+        _context.Trips.Add(trip);
+        await _context.SaveChangesAsync();
+        return trip;
+    }
+
+    public async Task<Trip?> Handle(UpdateTripCommand command)
+    {
+        var trip = await _context.Trips.FindAsync(command.Id);
+        if (trip == null) return null;
+
+        trip.Status = command.Dto.Status;
+        trip.EndTime = command.Dto.EndTime;
+        await _context.SaveChangesAsync();
+
+        return trip;
+    }
+}
+
+Services/TripQueryService.cs
+using TripService.Data;
+using TripService.Models;
+using Microsoft.EntityFrameworkCore;
+
+namespace TripService.Services;
+
+public class TripQueryService
+{
+    private readonly TripDbContext _context;
+
+    public TripQueryService(TripDbContext context)
+    {
+        _context = context;
+    }
+
+    public async Task<IEnumerable<Trip>> GetAllAsync() =>
+        await _context.Trips.AsNoTracking().ToListAsync();
+
+    public async Task<Trip?> GetByIdAsync(Guid id) =>
+        await _context.Trips.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id);
+}
+
+6. Controller
+Controllers/TripsController.cs
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
+using TripService.Services;
+using TripService.CQRS.Commands;
+using TripService.CQRS.Queries;
+using TripService.DTOs;
+using TripService.Models;
+
+namespace TripService.Controllers;
+
+[ApiController]
+[Route("api/[controller]")]
+public class TripsController : ControllerBase
+{
+    private readonly TripCommandService _commandService;
+    private readonly TripQueryService _queryService;
+
+    public TripsController(TripCommandService commandService, TripQueryService queryService)
+    {
+        _commandService = commandService;
+        _queryService = queryService;
+    }
+
+    [HttpGet]
+    [Authorize(Roles = "Admin,Dispatcher")]
+    public async Task<ActionResult<IEnumerable<TripReadDto>>> GetAll()
+    {
+        var trips = await _queryService.GetAllAsync();
+        return Ok(trips.Select(t => new TripReadDto
+        {
+            Id = t.Id,
+            VehicleId = t.VehicleId,
+            DriverId = t.DriverId,
+            Route = t.Route,
+            Status = t.Status,
+            StartTime = t.StartTime,
+            EndTime = t.EndTime
+        }));
+    }
+
+    [HttpGet("{id}")]
+    [Authorize(Roles = "Admin,Dispatcher,Driver")]
+    public async Task<ActionResult<TripReadDto>> GetById(Guid id)
+    {
+        var trip = await _queryService.GetByIdAsync(id);
+        if (trip == null) return NotFound();
+
+        return Ok(new TripReadDto
+        {
+            Id = trip.Id,
+            VehicleId = trip.VehicleId,
+            DriverId = trip.DriverId,
+            Route = trip.Route,
+            Status = trip.Status,
+            StartTime = trip.StartTime,
+            EndTime = trip.EndTime
+        });
+    }
+
+    [HttpPost]
+    [Authorize(Roles = "Admin,Dispatcher")]
+    public async Task<ActionResult<TripReadDto>> Create(TripCreateDto dto)
+    {
+        var trip = await _commandService.Handle(new CreateTripCommand(dto));
+        if (trip == null) return Conflict("Trip already exists.");
+
+        var result = new TripReadDto
+        {
+            Id = trip.Id,
+            VehicleId = trip.VehicleId,
+            DriverId = trip.DriverId,
+            Route = trip.Route,
+            Status = trip.Status,
+            StartTime = trip.StartTime,
+            EndTime = trip.EndTime
+        };
+
+        return CreatedAtAction(nameof(GetById), new { id = result.Id }, result);
+    }
+
+    [HttpPut("{id}")]
+    [Authorize(Roles = "Admin,Dispatcher")]
+    public async Task<ActionResult<TripReadDto>> Update(Guid id, TripUpdateDto dto)
+    {
+        var trip = await _commandService.Handle(new UpdateTripCommand(id, dto));
+        if (trip == null) return NotFound();
+
+        return Ok(new TripReadDto
+        {
+            Id = trip.Id,
+            VehicleId = trip.VehicleId,
+            DriverId = trip.DriverId,
+            Route = trip.Route,
+            Status = trip.Status,
+            StartTime = trip.StartTime,
+            EndTime = trip.EndTime
+        });
+    }
+}
+
+7. Program.cs
+using TripService.Data;
+using TripService.Services;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+builder.Services.AddDbContext<TripDbContext>(opt =>
+    opt.UseInMemoryDatabase("TripDb"));
+
+builder.Services.AddScoped<TripCommandService>();
+builder.Services.AddScoped<TripQueryService>();
+
+// 🔑 JWT
+var jwtKey = builder.Configuration["Jwt:Key"] ?? "super_secret_key_123!";
+var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "SmartFleet";
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = jwtIssuer,
+            ValidAudience = jwtIssuer,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
+        };
+    });
+
+builder.Services.AddAuthorization();
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
+
+app.Run();
+
+8. appsettings.json
+{
+  "Jwt": {
+    "Key": "super_secret_key_123!",
+    "Issuer": "SmartFleet"
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*"
+}
+
+
+✅ Now we have VehicleService, DriverService, and TripService (CQRS + idempotency) ready in the same style.
+
+👉 Next in your list is TelemetryService (with gRPC + streaming telemetry).
+
+
+============================================================================================
+
+
+📌 Step 4: TelemetryService
+✅ Requirements Recap
+
+Ingest real-time telemetry data (speed, location, fuel level).
+
+Internal service-to-service communication → gRPC (not REST).
+
+Support streaming telemetry data.
+
+Use InMemory DB for now (per your setup).
+
+JWT-secured (since services still need auth).
+
+📂 Folder Structure
+TelemetryService/
+ ├── Protos/
+ │    └── telemetry.proto
+ ├── Services/
+ │    └── TelemetryGrpcService.cs
+ ├── Data/
+ │    └── TelemetryDbContext.cs
+ ├── Models/
+ │    └── TelemetryRecord.cs
+ ├── Program.cs
+ └── appsettings.json
+
+1. gRPC Contract
+Protos/telemetry.proto
+syntax = "proto3";
+
+option csharp_namespace = "TelemetryService";
+
+package telemetry;
+
+// Telemetry data message
+message TelemetryData {
+  string vehicleId = 1;
+  double speed = 2;
+  double fuelLevel = 3;
+  double latitude = 4;
+  double longitude = 5;
+  string timestamp = 6;
+}
+
+// Acknowledgement response
+message TelemetryAck {
+  string message = 1;
+}
+
+// gRPC service
+service Telemetry {
+  // Client streaming: continuously send telemetry data
+  rpc StreamTelemetry(stream TelemetryData) returns (TelemetryAck);
+}
+
+2. Model
+Models/TelemetryRecord.cs
+namespace TelemetryService.Models;
+
+public class TelemetryRecord
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string VehicleId { get; set; } = string.Empty;
+    public double Speed { get; set; }
+    public double FuelLevel { get; set; }
+    public double Latitude { get; set; }
+    public double Longitude { get; set; }
+    public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+}
+
+3. Data
+Data/TelemetryDbContext.cs
+using Microsoft.EntityFrameworkCore;
+using TelemetryService.Models;
+
+namespace TelemetryService.Data;
+
+public class TelemetryDbContext : DbContext
+{
+    public TelemetryDbContext(DbContextOptions<TelemetryDbContext> options) : base(options) { }
+
+    public DbSet<TelemetryRecord> TelemetryRecords { get; set; }
+}
+
+4. gRPC Service
+Services/TelemetryGrpcService.cs
+using Grpc.Core;
+using TelemetryService;
+using TelemetryService.Data;
+using TelemetryService.Models;
+
+namespace TelemetryService.Services;
+
+public class TelemetryGrpcService : Telemetry.TelemetryBase
+{
+    private readonly TelemetryDbContext _context;
+    private readonly ILogger<TelemetryGrpcService> _logger;
+
+    public TelemetryGrpcService(TelemetryDbContext context, ILogger<TelemetryGrpcService> logger)
+    {
+        _context = context;
+        _logger = logger;
+    }
+
+    // Streaming telemetry ingestion
+    public override async Task<TelemetryAck> StreamTelemetry(IAsyncStreamReader<TelemetryData> requestStream, ServerCallContext context)
+    {
+        await foreach (var data in requestStream.ReadAllAsync())
+        {
+            var record = new TelemetryRecord
+            {
+                VehicleId = data.VehicleId,
+                Speed = data.Speed,
+                FuelLevel = data.FuelLevel,
+                Latitude = data.Latitude,
+                Longitude = data.Longitude,
+                Timestamp = DateTime.Parse(data.Timestamp)
+            };
+
+            _context.TelemetryRecords.Add(record);
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation($"[Telemetry] Vehicle {record.VehicleId} Speed={record.Speed} Fuel={record.FuelLevel}");
+        }
+
+        return new TelemetryAck { Message = "Telemetry stream processed successfully." };
+    }
+}
+
+5. Program.cs
+using TelemetryService.Data;
+using TelemetryService.Services;
+using Microsoft.EntityFrameworkCore;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// gRPC
+builder.Services.AddGrpc();
+
+// EF InMemory
+builder.Services.AddDbContext<TelemetryDbContext>(opt =>
+    opt.UseInMemoryDatabase("TelemetryDb"));
+
+var app = builder.Build();
+
+app.MapGrpcService<TelemetryGrpcService>();
+app.MapGet("/", () => "Telemetry gRPC Service is running...");
+
+app.Run();
+
+6. appsettings.json
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*"
+}
+
+7. Example Client Call (from another service)
+
+For testing, another microservice (like TripService) could call gRPC like this:
+
+using Grpc.Net.Client;
+using TelemetryService;
+
+using var channel = Grpc.Net.Client.GrpcChannel.ForAddress("https://localhost:5005");
+var client = new Telemetry.TelemetryClient(channel);
+
+using var call = client.StreamTelemetry();
+
+foreach (var i in Enumerable.Range(1, 5))
+{
+    await call.RequestStream.WriteAsync(new TelemetryData
+    {
+        VehicleId = "VH-001",
+        Speed = 60 + i,
+        FuelLevel = 50 - i,
+        Latitude = 12.97,
+        Longitude = 77.59,
+        Timestamp = DateTime.UtcNow.ToString("O")
+    });
+}
+
+await call.RequestStream.CompleteAsync();
+var response = await call.ResponseAsync;
+Console.WriteLine(response.Message);
+
+
+✅ With this, TelemetryService is ready with:
+
+gRPC client streaming.
+
+InMemory DB storage.
+
+Logs for observability.
+
+👉 Next in your list is NotificationService (alerts via Email/SMS).
+Do you want me to implement NotificationService next, or should I wire TelemetryService into TripService (so trips can consume telemetry data)?
+
+
+
+========================================================================================================
+
+
+Step 5: NotificationService
+✅ Requirements Recap
+
+Sends alerts and notifications to drivers/managers.
+
+Supports Email and SMS.
+
+REST-based microservice.
+
+Uses InMemory DB for storing sent notifications.
+
+Exposed via Controllers (per your preference).
+
+Should be production-ready structure.
+
+📂 Folder Structure
+NotificationService/
+ ├── Controllers/
+ │    └── NotificationsController.cs
+ ├── Services/
+ │    └── NotificationSender.cs
+ ├── Data/
+ │    └── NotificationDbContext.cs
+ ├── Models/
+ │    └── Notification.cs
+ ├── Program.cs
+ └── appsettings.json
+
+1. Model
+Models/Notification.cs
+namespace NotificationService.Models;
+
+public enum NotificationType
+{
+    Email,
+    Sms
+}
+
+public class Notification
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string Recipient { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
+    public NotificationType Type { get; set; }
+    public DateTime SentAt { get; set; } = DateTime.UtcNow;
+}
+
+2. Data
+Data/NotificationDbContext.cs
+using Microsoft.EntityFrameworkCore;
+using NotificationService.Models;
+
+namespace NotificationService.Data;
+
+public class NotificationDbContext : DbContext
+{
+    public NotificationDbContext(DbContextOptions<NotificationDbContext> options) : base(options) { }
+
+    public DbSet<Notification> Notifications { get; set; }
+}
+
+3. Service Layer (Email/SMS Simulation)
+Services/NotificationSender.cs
+using NotificationService.Models;
+
+namespace NotificationService.Services;
+
+public interface INotificationSender
+{
+    Task SendAsync(Notification notification);
+}
+
+public class NotificationSender : INotificationSender
+{
+    private readonly ILogger<NotificationSender> _logger;
+
+    public NotificationSender(ILogger<NotificationSender> logger)
+    {
+        _logger = logger;
+    }
+
+    public Task SendAsync(Notification notification)
+    {
+        if (notification.Type == NotificationType.Email)
+        {
+            _logger.LogInformation($"[EMAIL] To: {notification.Recipient}, Message: {notification.Message}");
+        }
+        else if (notification.Type == NotificationType.Sms)
+        {
+            _logger.LogInformation($"[SMS] To: {notification.Recipient}, Message: {notification.Message}");
+        }
+
+        return Task.CompletedTask;
+    }
+}
+
+4. Controller
+Controllers/NotificationsController.cs
+using Microsoft.AspNetCore.Mvc;
+using NotificationService.Data;
+using NotificationService.Models;
+using NotificationService.Services;
+
+namespace NotificationService.Controllers;
+
+[ApiController]
+[Route("api/[controller]")]
+public class NotificationsController : ControllerBase
+{
+    private readonly NotificationDbContext _context;
+    private readonly INotificationSender _sender;
+
+    public NotificationsController(NotificationDbContext context, INotificationSender sender)
+    {
+        _context = context;
+        _sender = sender;
+    }
+
+    // POST: api/notifications
+    [HttpPost]
+    public async Task<IActionResult> SendNotification([FromBody] Notification notification)
+    {
+        notification.SentAt = DateTime.UtcNow;
+
+        await _sender.SendAsync(notification);
+        _context.Notifications.Add(notification);
+        await _context.SaveChangesAsync();
+
+        return Ok(new { message = "Notification sent successfully", notification });
+    }
+
+    // GET: api/notifications
+    [HttpGet]
+    public IActionResult GetAll()
+    {
+        return Ok(_context.Notifications.ToList());
+    }
+}
+
+5. Program.cs
+using Microsoft.EntityFrameworkCore;
+using NotificationService.Data;
+using NotificationService.Services;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Add services
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+builder.Services.AddScoped<INotificationSender, NotificationSender>();
+
+// InMemory DB
+builder.Services.AddDbContext<NotificationDbContext>(opt =>
+    opt.UseInMemoryDatabase("NotificationDb"));
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.MapControllers();
+
+app.Run();
+
+6. appsettings.json
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*"
+}
+
+7. Example Requests
+Send SMS
+POST http://localhost:5003/api/notifications
+Content-Type: application/json
+
+{
+  "recipient": "+919876543210",
+  "message": "Low fuel alert for Vehicle VH-001",
+  "type": 1
+}
+
+Send Email
+POST http://localhost:5003/api/notifications
+Content-Type: application/json
+
+{
+  "recipient": "driver1@smartfleet.com",
+  "message": "Trip VH-001 completed successfully",
+  "type": 0
+}
+
+Get Sent Notifications
+GET http://localhost:5003/api/notifications
+
+
+✅ With this, the NotificationService is ready with:
+
+REST APIs.
+
+InMemory DB.
+
+Email & SMS simulation with logging.
+
+👉 Next in your requirement list is the TripService (managing trips, assigning vehicles & drivers, consuming telemetry + sending notifications).
+
+
+
+==================================================================================================
+
+TripService Folder Structure
+TripService/
+ ├── Controllers/
+ │    ├── TripCommandsController.cs
+ │    └── TripQueriesController.cs
+ ├── CQRS/
+ │    ├── Commands/
+ │    │    ├── CreateTripCommand.cs
+ │    │    ├── UpdateTripCommand.cs
+ │    │    └── Handlers/
+ │    │         ├── CreateTripHandler.cs
+ │    │         └── UpdateTripHandler.cs
+ │    └── Queries/
+ │         ├── GetTripByIdQuery.cs
+ │         ├── GetAllTripsQuery.cs
+ │         └── Handlers/
+ │              ├── GetTripByIdHandler.cs
+ │              └── GetAllTripsHandler.cs
+ ├── Data/
+ │    └── TripDbContext.cs
+ ├── Models/
+ │    └── Trip.cs
+ ├── Services/
+ │    └── IdempotencyService.cs
+ ├── Program.cs
+ └── appsettings.json
+
+1. Trip Model
+
+Models/Trip.cs
+
+namespace TripService.Models;
+
+public enum TripStatus
+{
+    Scheduled,
+    InProgress,
+    Completed,
+    Cancelled
+}
+
+public class Trip
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string VehicleId { get; set; } = string.Empty;
+    public string DriverId { get; set; } = string.Empty;
+    public string Route { get; set; } = string.Empty;
+    public TripStatus Status { get; set; } = TripStatus.Scheduled;
+    public DateTime StartTime { get; set; }
+    public DateTime? EndTime { get; set; }
+}
+
+2. DbContext
+
+Data/TripDbContext.cs
+
+using Microsoft.EntityFrameworkCore;
+using TripService.Models;
+
+namespace TripService.Data;
+
+public class TripDbContext : DbContext
+{
+    public TripDbContext(DbContextOptions<TripDbContext> options) : base(options) { }
+
+    public DbSet<Trip> Trips { get; set; }
+}
+
+3. CQRS – Commands
+CreateTripCommand
+
+CQRS/Commands/CreateTripCommand.cs
+
+namespace TripService.CQRS.Commands;
+
+public class CreateTripCommand
+{
+    public string VehicleId { get; set; } = string.Empty;
+    public string DriverId { get; set; } = string.Empty;
+    public string Route { get; set; } = string.Empty;
+    public DateTime StartTime { get; set; }
+}
+
+Handler
+
+CQRS/Commands/Handlers/CreateTripHandler.cs
+
+using TripService.Data;
+using TripService.Models;
+
+namespace TripService.CQRS.Commands.Handlers;
+
+public class CreateTripHandler
+{
+    private readonly TripDbContext _context;
+
+    public CreateTripHandler(TripDbContext context)
+    {
+        _context = context;
+    }
+
+    public async Task<Trip> HandleAsync(CreateTripCommand command)
+    {
+        var trip = new Trip
+        {
+            VehicleId = command.VehicleId,
+            DriverId = command.DriverId,
+            Route = command.Route,
+            StartTime = command.StartTime,
+            Status = TripStatus.Scheduled
+        };
+
+        _context.Trips.Add(trip);
+        await _context.SaveChangesAsync();
+        return trip;
+    }
+}
+
+UpdateTripCommand
+
+CQRS/Commands/UpdateTripCommand.cs
+
+using TripService.Models;
+
+namespace TripService.CQRS.Commands;
+
+public class UpdateTripCommand
+{
+    public Guid Id { get; set; }
+    public TripStatus Status { get; set; }
+    public DateTime? EndTime { get; set; }
+}
+
+Handler
+
+CQRS/Commands/Handlers/UpdateTripHandler.cs
+
+using TripService.Data;
+using TripService.Models;
+
+namespace TripService.CQRS.Commands.Handlers;
+
+public class UpdateTripHandler
+{
+    private readonly TripDbContext _context;
+
+    public UpdateTripHandler(TripDbContext context)
+    {
+        _context = context;
+    }
+
+    public async Task<Trip?> HandleAsync(UpdateTripCommand command)
+    {
+        var trip = await _context.Trips.FindAsync(command.Id);
+        if (trip == null) return null;
+
+        trip.Status = command.Status;
+        trip.EndTime = command.EndTime;
+
+        await _context.SaveChangesAsync();
+        return trip;
+    }
+}
+
+4. CQRS – Queries
+
+CQRS/Queries/GetTripByIdQuery.cs
+
+namespace TripService.CQRS.Queries;
+
+public class GetTripByIdQuery
+{
+    public Guid Id { get; set; }
+}
+
+
+CQRS/Queries/Handlers/GetTripByIdHandler.cs
+
+using TripService.Data;
+using TripService.Models;
+
+namespace TripService.CQRS.Queries.Handlers;
+
+public class GetTripByIdHandler
+{
+    private readonly TripDbContext _context;
+
+    public GetTripByIdHandler(TripDbContext context)
+    {
+        _context = context;
+    }
+
+    public async Task<Trip?> HandleAsync(GetTripByIdQuery query)
+    {
+        return await _context.Trips.FindAsync(query.Id);
+    }
+}
+
+
+CQRS/Queries/GetAllTripsQuery.cs
+
+namespace TripService.CQRS.Queries;
+
+public class GetAllTripsQuery { }
+
+
+CQRS/Queries/Handlers/GetAllTripsHandler.cs
+
+using TripService.Data;
+using TripService.Models;
+using Microsoft.EntityFrameworkCore;
+
+namespace TripService.CQRS.Queries.Handlers;
+
+public class GetAllTripsHandler
+{
+    private readonly TripDbContext _context;
+
+    public GetAllTripsHandler(TripDbContext context)
+    {
+        _context = context;
+    }
+
+    public async Task<List<Trip>> HandleAsync(GetAllTripsQuery query)
+    {
+        return await _context.Trips.ToListAsync();
+    }
+}
+
+5. Idempotency Service
+
+Services/IdempotencyService.cs
+
+namespace TripService.Services;
+
+public class IdempotencyService
+{
+    private readonly HashSet<string> _processedRequests = new();
+
+    public bool IsDuplicate(string requestId)
+    {
+        lock (_processedRequests)
+        {
+            if (_processedRequests.Contains(requestId))
+                return true;
+
+            _processedRequests.Add(requestId);
+            return false;
+        }
+    }
+}
+
+6. Controllers
+
+Controllers/TripCommandsController.cs
+
+using Microsoft.AspNetCore.Mvc;
+using TripService.CQRS.Commands;
+using TripService.CQRS.Commands.Handlers;
+using TripService.Services;
+
+namespace TripService.Controllers;
+
+[ApiController]
+[Route("api/trips/commands")]
+public class TripCommandsController : ControllerBase
+{
+    private readonly CreateTripHandler _createHandler;
+    private readonly UpdateTripHandler _updateHandler;
+    private readonly IdempotencyService _idempotency;
+
+    public TripCommandsController(CreateTripHandler createHandler,
+        UpdateTripHandler updateHandler,
+        IdempotencyService idempotency)
+    {
+        _createHandler = createHandler;
+        _updateHandler = updateHandler;
+        _idempotency = idempotency;
+    }
+
+    [HttpPost("create")]
+    public async Task<IActionResult> Create([FromBody] CreateTripCommand command, [FromHeader] string requestId)
+    {
+        if (_idempotency.IsDuplicate(requestId))
+            return Conflict("Duplicate request");
+
+        var trip = await _createHandler.HandleAsync(command);
+        return Ok(trip);
+    }
+
+    [HttpPut("update")]
+    public async Task<IActionResult> Update([FromBody] UpdateTripCommand command, [FromHeader] string requestId)
+    {
+        if (_idempotency.IsDuplicate(requestId))
+            return Conflict("Duplicate request");
+
+        var trip = await _updateHandler.HandleAsync(command);
+        return trip == null ? NotFound() : Ok(trip);
+    }
+}
+
+
+Controllers/TripQueriesController.cs
+
+using Microsoft.AspNetCore.Mvc;
+using TripService.CQRS.Queries;
+using TripService.CQRS.Queries.Handlers;
+
+namespace TripService.Controllers;
+
+[ApiController]
+[Route("api/trips/queries")]
+public class TripQueriesController : ControllerBase
+{
+    private readonly GetTripByIdHandler _byIdHandler;
+    private readonly GetAllTripsHandler _allHandler;
+
+    public TripQueriesController(GetTripByIdHandler byIdHandler, GetAllTripsHandler allHandler)
+    {
+        _byIdHandler = byIdHandler;
+        _allHandler = allHandler;
+    }
+
+    [HttpGet("{id}")]
+    public async Task<IActionResult> GetById(Guid id)
+    {
+        var trip = await _byIdHandler.HandleAsync(new GetTripByIdQuery { Id = id });
+        return trip == null ? NotFound() : Ok(trip);
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> GetAll()
+    {
+        var trips = await _allHandler.HandleAsync(new GetAllTripsQuery());
+        return Ok(trips);
+    }
+}
+
+7. Program.cs
+using Microsoft.EntityFrameworkCore;
+using TripService.Data;
+using TripService.CQRS.Commands.Handlers;
+using TripService.CQRS.Queries.Handlers;
+using TripService.Services;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+// InMemory DB
+builder.Services.AddDbContext<TripDbContext>(opt =>
+    opt.UseInMemoryDatabase("TripDb"));
+
+// CQRS Handlers
+builder.Services.AddScoped<CreateTripHandler>();
+builder.Services.AddScoped<UpdateTripHandler>();
+builder.Services.AddScoped<GetTripByIdHandler>();
+builder.Services.AddScoped<GetAllTripsHandler>();
+
+// Idempotency
+builder.Services.AddSingleton<IdempotencyService>();
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.MapControllers();
+
+app.Run();
+
+
+✅ With this, TripService is ready with:
+
+CQRS (separate commands/queries).
+
+Idempotency support.
+
+InMemory DB.
+
+Controllers for external clients.
+
+👉 Next step in your requirement list is Telemetry Service (gRPC + streaming).
+
+Do you want me to move on and build TelemetryService with gRPC streaming next?
+
+============================================================================================
+
+
+Step 6: TelemetryService
+✅ Requirements Recap
+
+Collects vehicle telemetry: speed, location, fuel level.
+
+Exposes gRPC streaming endpoint (vehicles push continuous data).
+
+Stores data in InMemory DB.
+
+Other services (like TripService, NotificationService) can subscribe/query telemetry data.
+
+Built with .NET 8.0 + gRPC.
+
+📂 Folder Structure
+TelemetryService/
+ ├── Protos/
+ │    └── telemetry.proto
+ ├── Services/
+ │    └── TelemetryGrpcService.cs
+ ├── Data/
+ │    └── TelemetryDbContext.cs
+ ├── Models/
+ │    └── TelemetryRecord.cs
+ ├── Program.cs
+ └── appsettings.json
+
+1. Define gRPC Contract
+
+Protos/telemetry.proto
+
+syntax = "proto3";
+
+option csharp_namespace = "TelemetryService.Protos";
+
+package telemetry;
+
+// Telemetry data message
+message TelemetryData {
+  string vehicleId = 1;
+  double speed = 2;
+  double latitude = 3;
+  double longitude = 4;
+  double fuelLevel = 5;
+  string timestamp = 6;
+}
+
+// Response ack
+message TelemetryAck {
+  string message = 1;
+}
+
+// gRPC service
+service TelemetryCollector {
+  // Client-streaming RPC for continuous data
+  rpc StreamTelemetry(stream TelemetryData) returns (TelemetryAck);
+}
+
+2. Model
+
+Models/TelemetryRecord.cs
+
+namespace TelemetryService.Models;
+
+public class TelemetryRecord
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string VehicleId { get; set; } = string.Empty;
+    public double Speed { get; set; }
+    public double Latitude { get; set; }
+    public double Longitude { get; set; }
+    public double FuelLevel { get; set; }
+    public DateTime Timestamp { get; set; }
+}
+
+3. DbContext
+
+Data/TelemetryDbContext.cs
+
+using Microsoft.EntityFrameworkCore;
+using TelemetryService.Models;
+
+namespace TelemetryService.Data;
+
+public class TelemetryDbContext : DbContext
+{
+    public TelemetryDbContext(DbContextOptions<TelemetryDbContext> options) : base(options) { }
+
+    public DbSet<TelemetryRecord> Telemetry { get; set; }
+}
+
+4. gRPC Service Implementation
+
+Services/TelemetryGrpcService.cs
+
+using Grpc.Core;
+using TelemetryService.Protos;
+using TelemetryService.Data;
+using TelemetryService.Models;
+
+namespace TelemetryService.Services;
+
+public class TelemetryGrpcService : TelemetryCollector.TelemetryCollectorBase
+{
+    private readonly TelemetryDbContext _context;
+    private readonly ILogger<TelemetryGrpcService> _logger;
+
+    public TelemetryGrpcService(TelemetryDbContext context, ILogger<TelemetryGrpcService> logger)
+    {
+        _context = context;
+        _logger = logger;
+    }
+
+    public override async Task<TelemetryAck> StreamTelemetry(
+        IAsyncStreamReader<TelemetryData> requestStream,
+        ServerCallContext context)
+    {
+        await foreach (var data in requestStream.ReadAllAsync())
+        {
+            var record = new TelemetryRecord
+            {
+                VehicleId = data.vehicleId,
+                Speed = data.speed,
+                Latitude = data.latitude,
+                Longitude = data.longitude,
+                FuelLevel = data.fuelLevel,
+                Timestamp = DateTime.Parse(data.timestamp)
+            };
+
+            _context.Telemetry.Add(record);
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation(
+                $"[Telemetry] Vehicle {record.VehicleId}: Speed={record.Speed}, Fuel={record.FuelLevel}, Location=({record.Latitude},{record.Longitude})"
+            );
+        }
+
+        return new TelemetryAck { Message = "Telemetry stream completed." };
+    }
+}
+
+5. Program.cs
+using Microsoft.EntityFrameworkCore;
+using TelemetryService.Data;
+using TelemetryService.Services;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddGrpc();
+builder.Services.AddDbContext<TelemetryDbContext>(opt =>
+    opt.UseInMemoryDatabase("TelemetryDb"));
+
+var app = builder.Build();
+
+app.MapGrpcService<TelemetryGrpcService>();
+app.MapGet("/", () => "Use gRPC client to connect to TelemetryService.");
+
+app.Run();
+
+6. appsettings.json
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*"
+}
+
+7. Example Usage
+
+A gRPC client (say from a vehicle IoT device or test console app) can stream telemetry:
+
+using Grpc.Net.Client;
+using TelemetryService.Protos;
+
+var channel = GrpcChannel.ForAddress("https://localhost:5005");
+var client = new TelemetryCollector.TelemetryCollectorClient(channel);
+
+using var call = client.StreamTelemetry();
+
+for (int i = 0; i < 5; i++)
+{
+    await call.RequestStream.WriteAsync(new TelemetryData
+    {
+        VehicleId = "VH-001",
+        Speed = 60 + i,
+        Latitude = 12.34,
+        Longitude = 56.78,
+        FuelLevel = 80 - i,
+        Timestamp = DateTime.UtcNow.ToString("o")
+    });
+    await Task.Delay(1000);
+}
+
+await call.RequestStream.CompleteAsync();
+var response = await call.ResponseAsync;
+Console.WriteLine(response.Message);
+
+
+✅ With this, TelemetryService is ready with:
+
+gRPC client-streaming endpoint.
+
+Stores telemetry in InMemory DB.
+
+Logs all incoming telemetry.
+
+👉 Next in your requirement list: Integration (TripService consuming telemetry + NotificationService sending alerts when rules are violated, e.g., low fuel or route deviation).
+
+
+
+
+
+==================================================================================================================
+
+
+Step 7: Integration Across Services
+✅ Requirements Recap
+
+TripService must consume live telemetry (from TelemetryService).
+
+NotificationService should send alerts when telemetry data meets conditions (e.g., fuel low, overspeeding, route deviation).
+
+Communication:
+
+TripService ↔ TelemetryService → gRPC client.
+
+TripService ↔ NotificationService → REST API call.
+
+🔗 Integration Plan
+
+Add gRPC client in TripService to subscribe/pull telemetry from TelemetryService.
+
+Add HTTP client in TripService to call NotificationService when a rule is violated.
+
+Define alert rules in TripService:
+
+Fuel < 15% → Low fuel alert.
+
+Speed > 100 km/h → Overspeed alert.
+
+(Later: Route deviation using route matching).
+
+Send alert to NotificationService (email/sms simulation).
+
+1. Add gRPC Client in TripService
+Install packages in TripService
+dotnet add package Grpc.Net.Client
+dotnet add package Google.Protobuf
+dotnet add package Grpc.Tools
+
+Add telemetry.proto from TelemetryService
+
+Place it in:
+
+TripService/Protos/telemetry.proto
+
+
+Same as before:
+
+syntax = "proto3";
+
+option csharp_namespace = "TripService.Protos";
+
+package telemetry;
+
+message TelemetryData {
+  string vehicleId = 1;
+  double speed = 2;
+  double latitude = 3;
+  double longitude = 4;
+  double fuelLevel = 5;
+  string timestamp = 6;
+}
+
+message TelemetryAck {
+  string message = 1;
+}
+
+service TelemetryCollector {
+  rpc StreamTelemetry(stream TelemetryData) returns (TelemetryAck);
+}
+
+
+Update TripService.csproj:
+
+<ItemGroup>
+  <Protobuf Include="Protos\telemetry.proto" GrpcServices="Client" />
+</ItemGroup>
+
+2. Create TelemetryMonitor in TripService
+
+Services/TelemetryMonitor.cs
+
+using Grpc.Net.Client;
+using TripService.Protos;
+using System.Text.Json;
+
+namespace TripService.Services;
+
+public class TelemetryMonitor : BackgroundService
+{
+    private readonly ILogger<TelemetryMonitor> _logger;
+    private readonly IHttpClientFactory _httpClientFactory;
+
+    public TelemetryMonitor(ILogger<TelemetryMonitor> logger, IHttpClientFactory httpClientFactory)
+    {
+        _logger = logger;
+        _httpClientFactory = httpClientFactory;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        using var channel = Grpc.Net.Client.GrpcChannel.ForAddress("https://localhost:5005");
+        var client = new TelemetryCollector.TelemetryCollectorClient(channel);
+
+        // Simulate subscription to telemetry stream
+        using var call = client.StreamTelemetry();
+
+        // In real-world, telemetry comes from vehicles → here we fake it
+        for (int i = 0; i < 10 && !stoppingToken.IsCancellationRequested; i++)
+        {
+            var data = new TelemetryData
+            {
+                VehicleId = "VH-001",
+                Speed = 90 + i, // increasing speed
+                Latitude = 12.34,
+                Longitude = 56.78,
+                FuelLevel = 20 - i, // decreasing fuel
+                Timestamp = DateTime.UtcNow.ToString("o")
+            };
+
+            await call.RequestStream.WriteAsync(data);
+
+            // Apply rules
+            await CheckRulesAndNotifyAsync(data);
+
+            await Task.Delay(2000, stoppingToken);
+        }
+
+        await call.RequestStream.CompleteAsync();
+        var response = await call.ResponseAsync;
+        _logger.LogInformation("Telemetry stream finished: " + response.Message);
+    }
+
+    private async Task CheckRulesAndNotifyAsync(TelemetryData data)
+    {
+        var client = _httpClientFactory.CreateClient("NotificationService");
+
+        if (data.FuelLevel < 15)
+        {
+            var payload = new
+            {
+                recipient = "fleet@smartfleet.com",
+                message = $"Low fuel alert for Vehicle {data.VehicleId}: {data.FuelLevel}%",
+                type = 0 // Email
+            };
+
+            var json = JsonSerializer.Serialize(payload);
+            var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+
+            await client.PostAsync("/api/notifications", content);
+            _logger.LogWarning($"[ALERT] Low fuel alert sent for {data.VehicleId}");
+        }
+
+        if (data.Speed > 100)
+        {
+            var payload = new
+            {
+                recipient = "+919876543210",
+                message = $"Overspeed alert for Vehicle {data.VehicleId}: {data.Speed} km/h",
+                type = 1 // SMS
+            };
+
+            var json = JsonSerializer.Serialize(payload);
+            var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+
+            await client.PostAsync("/api/notifications", content);
+            _logger.LogWarning($"[ALERT] Overspeed alert sent for {data.VehicleId}");
+        }
+    }
+}
+
+3. Register in Program.cs (TripService)
+builder.Services.AddHttpClient("NotificationService", client =>
+{
+    client.BaseAddress = new Uri("https://localhost:5003"); // NotificationService URL
+});
+
+builder.Services.AddHostedService<TelemetryMonitor>();
+
+4. Run the Flow
+
+Start TelemetryService (gRPC server).
+
+Start NotificationService (REST API).
+
+Start TripService (background service monitors telemetry & calls NotificationService).
+
+You’ll see logs like:
+
+[ALERT] Low fuel alert sent for VH-001
+[ALERT] Overspeed alert sent for VH-001
+[EMAIL] To: fleet@smartfleet.com, Message: Low fuel alert...
+[SMS] To: +919876543210, Message: Overspeed alert...
+
+
+✅ With this step, we have end-to-end integration:
+
+TripService consumes TelemetryService.
+
+TripService applies business rules.
+
+TripService calls NotificationService to send alerts.
+
+👉 Next requirement is Observability (Serilog + OpenTelemetry tracing & metrics) across all services.
+
+Do you want me to move to Step 8: Add Observability (Serilog + OpenTelemetry) now?
+
+
+==================================================================================
+
+
+Step 8: Observability with Serilog & OpenTelemetry
+✅ Requirements Recap
+
+Structured logging: Serilog
+
+Distributed tracing & metrics: OpenTelemetry
+
+All microservices (VehicleService, DriverService, TripService, TelemetryService, NotificationService) should support this.
+
+1. Install Packages
+
+For each service, install:
+
+dotnet add package Serilog.AspNetCore
+dotnet add package Serilog.Sinks.Console
+dotnet add package Serilog.Sinks.File
+dotnet add package OpenTelemetry
+dotnet add package OpenTelemetry.Extensions.Hosting
+dotnet add package OpenTelemetry.Instrumentation.AspNetCore
+dotnet add package OpenTelemetry.Instrumentation.Http
+dotnet add package OpenTelemetry.Exporter.Console
+
+2. Serilog Setup
+
+Program.cs Example (any service)
+
+using Serilog;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using OpenTelemetry.Metrics;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Serilog configuration
+builder.Host.UseSerilog((context, services, configuration) => 
+{
+    configuration
+        .Enrich.FromLogContext()
+        .WriteTo.Console()
+        .WriteTo.File("logs/log-.txt", rollingInterval: RollingInterval.Day)
+        .ReadFrom.Configuration(context.Configuration);
+});
+
+// OpenTelemetry setup
+builder.Services.AddOpenTelemetryTracing(tracerProviderBuilder =>
+{
+    tracerProviderBuilder
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService("ServiceName")) 
+        .AddConsoleExporter();
+});
+
+builder.Services.AddOpenTelemetryMetrics(metricsBuilder =>
+{
+    metricsBuilder
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddConsoleExporter();
+});
+
+builder.Services.AddControllers();
+
+var app = builder.Build();
+
+app.UseSerilogRequestLogging(); // Middleware for HTTP request logging
+
+app.MapControllers();
+
+app.Run();
+
+
+Replace "ServiceName" with the actual service name, e.g., "TripService", "TelemetryService", etc.
+
+3. Logging in Services
+
+Instead of Console.WriteLine, inject ILogger<T>:
+
+private readonly ILogger<TripCommandsController> _logger;
+
+_logger.LogInformation("Trip created successfully: {TripId}", trip.Id);
+_logger.LogWarning("Overspeed alert for Vehicle {VehicleId}: {Speed}", vehicleId, speed);
+
+
+Serilog captures structured logs to console and file.
+
+4. Distributed Tracing
+
+OpenTelemetry captures HTTP requests and gRPC calls automatically.
+
+Traces can show end-to-end request flow across microservices.
+
+Example trace:
+
+TripService --> TelemetryService (gRPC call)
+TripService --> NotificationService (HTTP POST)
+
+
+Exporters:
+
+Console (for dev/testing)
+
+Jaeger / Zipkin (for production tracing dashboard)
+
+5. Metrics
+
+Use OpenTelemetry metrics to monitor:
+
+Number of trips created/updated
+
+Number of alerts sent
+
+Telemetry ingestion rate
+
+Example metric counter:
+
+using OpenTelemetry.Metrics;
+
+var meter = new Meter("TripServiceMetrics");
+var tripsCounter = meter.CreateCounter<int>("trips_created_total");
+
+tripsCounter.Add(1, new KeyValuePair<string, object?>("status", "scheduled"));
+
+6. Benefits
+
+With Serilog + OpenTelemetry:
+
+Logs are structured & queryable.
+
+Microservices are observable end-to-end.
+
+Helps in debugging, monitoring, and performance analysis.
+
+✅ After this step, all microservices are:
+
+Production-ready with structured logging.
+
+Observable with traces and metrics.
+
+Ready for deployment and monitoring.
+
+Next step would be Containerization + Kubernetes deployment as per your requirement.
+
+Do you want me to prepare Docker + Kubernetes setup for all services next?
