@@ -1,3 +1,289 @@
+
+
+🚀 AuthService
+📌 Program.cs
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
+using System.Text;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Add services
+builder.Services.AddControllers();
+
+var key = builder.Configuration["Jwt:Key"] ?? "your_super_secret_key_12345";
+var issuer = builder.Configuration["Jwt:Issuer"] ?? "SmartFleet.AuthService";
+var audience = builder.Configuration["Jwt:Audience"] ?? "SmartFleet.Client";
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer = issuer,
+        ValidAudience = audience,
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key))
+    };
+});
+
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new() { Title = "AuthService", Version = "v1" });
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Type = SecuritySchemeType.ApiKey,
+        Scheme = "Bearer",
+        BearerFormat = "JWT",
+        In = ParameterLocation.Header,
+        Description = "Enter 'Bearer {token}'"
+    });
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" }
+            },
+            new string[] {}
+        }
+    });
+});
+
+var app = builder.Build();
+
+app.UseSwagger();
+app.UseSwaggerUI();
+
+app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapControllers();
+
+app.Run();
+
+📌 AuthController.cs (Endpoints)
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
+
+namespace SmartFleet.AuthService.Controllers
+{
+    [ApiController]
+    [Route("api/[controller]")]
+    public class AuthController : ControllerBase
+    {
+        private readonly IConfiguration _config;
+
+        public AuthController(IConfiguration config)
+        {
+            _config = config;
+        }
+
+        [HttpPost("login")]
+        public IActionResult Login([FromBody] LoginRequest request)
+        {
+            // ✅ For demo: Accept any user with username/password and assign role
+            if (string.IsNullOrEmpty(request.Username) || string.IsNullOrEmpty(request.Password))
+                return Unauthorized("Invalid credentials");
+
+            var claims = new[]
+            {
+                new Claim(JwtRegisteredClaimNames.Sub, request.Username),
+                new Claim(ClaimTypes.Role, request.Role),
+                new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+            };
+
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_config["Jwt:Key"] ?? "your_super_secret_key_12345"));
+            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+            var token = new JwtSecurityToken(
+                issuer: _config["Jwt:Issuer"] ?? "SmartFleet.AuthService",
+                audience: _config["Jwt:Audience"] ?? "SmartFleet.Client",
+                claims: claims,
+                expires: DateTime.UtcNow.AddHours(1),
+                signingCredentials: creds
+            );
+
+            return Ok(new
+            {
+                token = new JwtSecurityTokenHandler().WriteToken(token),
+                expiration = token.ValidTo
+            });
+        }
+    }
+
+    public record LoginRequest(string Username, string Password, string Role);
+}
+
+📌 launchSettings.json (AuthService)
+{
+  "profiles": {
+    "SmartFleet.AuthService": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "applicationUrl": "https://localhost:5001;http://localhost:5000",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "Jwt:Key": "your_super_secret_key_12345",
+        "Jwt:Issuer": "SmartFleet.AuthService",
+        "Jwt:Audience": "SmartFleet.Client"
+      }
+    }
+  }
+}
+
+🚀 DriverService
+📌 Program.cs
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
+using System.Text;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Add services
+builder.Services.AddControllers();
+
+var key = builder.Configuration["Jwt:Key"] ?? "your_super_secret_key_12345";
+var issuer = builder.Configuration["Jwt:Issuer"] ?? "SmartFleet.AuthService";
+var audience = builder.Configuration["Jwt:Audience"] ?? "SmartFleet.Client";
+
+builder.Services.AddAuthentication("Bearer")
+    .AddJwtBearer("Bearer", options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = issuer,
+            ValidAudience = audience,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key))
+        };
+    });
+
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new() { Title = "DriverService", Version = "v1" });
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Type = SecuritySchemeType.ApiKey,
+        Scheme = "Bearer",
+        BearerFormat = "JWT",
+        In = ParameterLocation.Header,
+        Description = "Enter 'Bearer {token}'"
+    });
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" }
+            },
+            new string[] {}
+        }
+    });
+});
+
+builder.Services.AddDbContext<DriverDbContext>(opt => opt.UseInMemoryDatabase("DriverDb"));
+
+var app = builder.Build();
+
+app.UseSwagger();
+app.UseSwaggerUI();
+
+app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapControllers();
+
+app.Run();
+
+📌 launchSettings.json (DriverService)
+{
+  "profiles": {
+    "SmartFleet.DriverService": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "applicationUrl": "https://localhost:6001;http://localhost:6000",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "Jwt:Key": "your_super_secret_key_12345",
+        "Jwt:Issuer": "SmartFleet.AuthService",
+        "Jwt:Audience": "SmartFleet.Client"
+      }
+    }
+  }
+}
+
+🧪 Testing Flow (Swagger/Postman)
+
+Run AuthService → Open Swagger → POST /api/auth/login with body:
+
+{
+  "username": "admin",
+  "password": "1234",
+  "role": "Admin"
+}
+
+
+✅ Copy the token returned.
+
+Run DriverService → Open Swagger → Click Authorize → Enter:
+
+Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6...
+
+
+Now call any GET/POST/PUT/DELETE in DriverService → ✅ works with your role (Admin).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 Great — we’ll add a dedicated AuthService and wire all existing services to accept its JWT tokens. I’ll walk you through step-by-step: create the project, add code files, seed demo users/roles, configure JWT, update other services to use the same secret/issuer, and how to test in Swagger / Postman.
 
 I’ll keep the instructions simple and copy-paste ready.
@@ -627,5 +913,6 @@ Folder structure
 Testing instructions
 
 Real-life scenario
+
 
 Do you also want me to generate a high-level architecture diagram (PNG/PDF) along with this documentation? 
